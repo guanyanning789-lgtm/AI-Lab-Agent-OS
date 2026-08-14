@@ -7,11 +7,7 @@ from app.core import TaskState, TaskStatus, TaskStep
 
 
 class JsonTaskStore:
-    """Minimal durable task-state store for the V0.1 runtime.
-
-    Files are written atomically enough for a single-process local runtime:
-    write a temporary JSON file, then replace the destination.
-    """
+    """Minimal durable task-state store for the V0.1 runtime."""
 
     def __init__(self, root: str | Path = ".ai-lab/tasks") -> None:
         self.root = Path(root)
@@ -37,12 +33,9 @@ class JsonTaskStore:
             "tests": list(task.tests),
             "approved": task.approved,
             "verification_errors": list(task.verification_errors),
+            "allowed_paths": list(task.allowed_paths),
             "steps": [
-                {
-                    "name": step.name,
-                    "status": step.status.value,
-                    "message": step.message,
-                }
+                {"name": step.name, "status": step.status.value, "message": step.message}
                 for step in task.steps
             ],
             "history": list(task.history),
@@ -63,6 +56,7 @@ class JsonTaskStore:
             tests=tuple(payload.get("tests", ())),
             approved=bool(payload.get("approved", False)),
             verification_errors=tuple(payload.get("verification_errors", ())),
+            allowed_paths=tuple(payload.get("allowed_paths", ())),
             steps=[
                 TaskStep(
                     name=str(step["name"]),
