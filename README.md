@@ -33,9 +33,7 @@ AI Lab Agent OS is a local-first autonomous agent runtime designed around one ou
   - Metrics
   - Audit
 
-## V0.1 acceptance target
-
-The first executable vertical slice is:
+## Current vertical slice
 
 ```text
 Natural-language goal
@@ -43,28 +41,81 @@ Natural-language goal
     -> Task State
     -> Tool Router
     -> Coding Agent
+    -> Cline transport (optional, explicit enable)
     -> Verification
-    -> Retry / Repair / Replan on failure
-    -> COMPLETE
+    -> Retry / Repair with previous verification error
+    -> Replan after retry budget is exhausted
+    -> COMPLETE / FAILED
 ```
 
-V0.1 uses an in-process deterministic coding-agent adapter so the orchestration loop can be tested without requiring Cline to be installed in CI. A real Cline transport is the next integration target.
+The runtime keeps a deterministic in-process Coding Agent fallback so orchestration can be tested in CI without Cline installed. When `AI_LAB_CLINE_ENABLED=1`, Coding Agent delegates through the real Cline CLI transport.
+
+## Safety defaults
+
+Real Cline execution is **off by default**. Enabling the transport still does not grant task approval automatically.
+
+- `AI_LAB_CLINE_ENABLED=1` enables the Cline-backed Coding Agent.
+- `approved: true` is required on an individual coding task before Cline is invoked.
+- `AI_LAB_CLINE_AUTO_APPROVE` defaults to false and controls Cline's own CLI auto-approval setting.
+- Cline is instructed to stay inside the supplied repository and not commit, push, merge, or change branches.
+- AI Lab Agent OS retains ownership of verification, retry, repair, replan and completion decisions.
 
 ## Quick start
 
 ```bash
-python -m pip install -e .[dev]
-pytest
+python -m pip install -e ".[dev]"
+python -m pytest -q
 uvicorn app.main:app --reload
 ```
 
-Then submit a task:
+### Deterministic runtime smoke test
 
 ```bash
 curl -X POST http://127.0.0.1:8000/tasks \
   -H "Content-Type: application/json" \
   -d '{"goal":"Fix the coding task and verify it"}'
 ```
+
+### Real Cline-backed coding task
+
+On Windows PowerShell:
+
+```powershell
+$env:AI_LAB_CLINE_ENABLED = "1"
+$env:AI_LAB_CLINE_AUTO_APPROVE = "0"
+uvicorn app.main:app --reload
+```
+
+Then POST a task containing the local repository path, verification commands and explicit approval:
+
+```json
+{
+  "goal": "Fix the failing parser test",
+  "repository_path": "C:\\AI-Lab\\target-repo",
+  "tests": ["python -m pytest -q"],
+  "approved": true,
+  "max_retries": 2
+}
+```
+
+If the first Cline attempt fails verification, the Supervisor records the failure, increments the retry budget, switches the next Cline request to `repair` mode, and includes prior verification errors in the repair prompt.
+
+## V0.1 acceptance target
+
+V0.1 is accepted only after the real local end-to-end proof succeeds:
+
+```text
+user goal
+ -> Supervisor
+ -> Cline
+ -> repository change
+ -> tests
+ -> verification
+ -> automatic repair/replan if needed
+ -> COMPLETE
+```
+
+A successful mock or deterministic-adapter test does **not** count as completion of this milestone.
 
 ## Design rule
 
