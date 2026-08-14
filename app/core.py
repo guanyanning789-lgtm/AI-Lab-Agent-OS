@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Protocol
 
 from app.cline import ClineRequest, ClineTransport
+from app.scope_guard import GitScopeGuard
 from app.verification import TestCommandVerifier
 
 
@@ -38,6 +39,7 @@ class TaskState:
     tests: tuple[str, ...] = ()
     approved: bool = False
     verification_errors: tuple[str, ...] = ()
+    allowed_paths: tuple[str, ...] = ()
     steps: list[TaskStep] = field(default_factory=list)
     history: list[str] = field(default_factory=list)
     result: str | None = None
@@ -67,23 +69,12 @@ class CodingAgent:
 
     def run(self, task: TaskState) -> AgentResult:
         task.record("coding-agent: execution requested")
-
         if self._transport is None:
-            return AgentResult(
-                success=True,
-                message=f"Coding task accepted by deterministic adapter: {task.goal}",
-            )
-
+            return AgentResult(True, f"Coding task accepted by deterministic adapter: {task.goal}")
         if not task.approved:
-            return AgentResult(
-                success=False,
-                message="Human approval is required before delegating a coding task to Cline.",
-            )
+            return AgentResult(False, "Human approval is required before delegating a coding task to Cline.")
         if not task.repository_path:
-            return AgentResult(
-                success=False,
-                message="repository_path is required for Cline coding tasks.",
-            )
+            return AgentResult(False, "repository_path is required for Cline coding tasks.")
 
         mode = "repair" if task.verification_errors else "delegate"
         response = self._transport.send(
@@ -93,6 +84,7 @@ class CodingAgent:
                 tests=task.tests,
                 mode=mode,
                 verification_errors=task.verification_errors,
+                allowed_paths=task.allowed_paths,
             )
         )
         return AgentResult(success=response.accepted, message=response.message)
@@ -103,7 +95,7 @@ class ResearchAgent:
 
     def run(self, task: TaskState) -> AgentResult:
         task.record("research-agent: execution requested")
-        return AgentResult(success=True, message=f"Research task accepted: {task.goal}")
+        return AgentResult(True, f"Research task accepted: {task.goal}")
 
 
 class ComputerAgent:
@@ -111,7 +103,7 @@ class ComputerAgent:
 
     def run(self, task: TaskState) -> AgentResult:
         task.record("computer-agent: execution requested")
-        return AgentResult(success=True, message=f"Computer task accepted: {task.goal}")
+        return AgentResult(True, f"Computer task accepted: {task.goal}")
 
 
 class ToolRouter:
@@ -145,25 +137,33 @@ class SafetyGate:
 
 
 class Verifier:
-    def __init__(self, *, test_verifier: TestCommandVerifier | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        test_verifier: TestCommandVerifier | None = None,
+        scope_guard: GitScopeGuard | None = None,
+    ) -> None:
         self._test_verifier = test_verifier or TestCommandVerifier()
+        self._scope_guard = scope_guard or GitScopeGuard()
 
     def verify(self, result: AgentResult, task: TaskState | None = None) -> tuple[bool, str]:
         if not result.success:
             return False, result.message or "verification failed"
 
-        if (
-            task is not None
-            and task.assigned_agent == "coding"
-            and task.repository_path
-            and task.tests
-        ):
-            evidence = self._test_verifier.run(
-                repository_path=task.repository_path,
-                commands=task.tests,
-            )
-            return evidence.passed, evidence.message
-
+        if task is not None and task.assigned_agent == "coding" and task.repository_path:
+            if task.allowed_paths:
+                scope = self._scope_guard.check(
+                    repository_path=task.repository_path,
+                    allowed_paths=task.allowed_paths,
+                )
+                if not scope.passed:
+                    return False, scope.message
+            if task.tests:
+                evidence = self._test_verifier.run(
+                    repository_path=task.repository_path,
+                    commands=task.tests,
+                )
+                return evidence.passed, evidence.message
         return True, "verification passed"
 
 
@@ -215,13 +215,12 @@ class Supervisor:
         self.plan(task)
         task.status = TaskStatus.RUNNING
         task.steps[0].status = TaskStatus.COMPLETE
-
         agent_name = self.router.classify(task.goal)
         task.assigned_agent = agent_name
         task.steps[1].status = TaskStatus.COMPLETE
         task.record(f"router: {agent_name}")
-
         agent = self.router.get_agent(agent_name)
+
         while True:
             task.current_step = 2
             task.steps[2].status = TaskStatus.RUNNING
