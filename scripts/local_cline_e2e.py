@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from app.cline import ClineCliTransport
+from app.cline import ClineCliConfig, ClineCliTransport
 from app.core import CodingAgent, Supervisor, TaskState, ToolRouter
 
 
@@ -29,8 +29,16 @@ def main() -> int:
     args = parse_args()
     repository = Path(args.repository).resolve()
 
+    # This harness creates an explicitly approved AI Lab task. In Cline's
+    # non-interactive/headless mode, tool calls cannot wait for a human prompt,
+    # so the outer AI Lab approval is handed off as Cline tool auto-approval.
+    # AI Lab still owns the repository scope, verification, retry/repair and
+    # final completion decision.
+    transport = ClineCliTransport(
+        ClineCliConfig(auto_approve=True)
+    )
     supervisor = Supervisor(
-        router=ToolRouter(coding_agent=CodingAgent(ClineCliTransport()))
+        router=ToolRouter(coding_agent=CodingAgent(transport))
     )
     task = TaskState(
         task_id="local-cline-e2e",
