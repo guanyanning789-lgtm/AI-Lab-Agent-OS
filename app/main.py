@@ -25,11 +25,16 @@ def build_supervisor() -> Supervisor:
     if not _env_flag("AI_LAB_CLINE_ENABLED"):
         return Supervisor()
 
+    # Cline's JSON/headless mode cannot pause for terminal approvals. Once the
+    # operator has explicitly enabled the Cline transport, individual tasks
+    # are still blocked by TaskState.approved. For an approved task we let
+    # Cline execute its internal tools unattended, while AI Lab retains the
+    # repository scope, verification and retry/repair authority.
     transport = ClineCliTransport(
         ClineCliConfig(
             executable=os.environ.get("AI_LAB_CLINE_EXECUTABLE", "cline"),
             timeout_seconds=int(os.environ.get("AI_LAB_CLINE_TIMEOUT", "900")),
-            auto_approve=_env_flag("AI_LAB_CLINE_AUTO_APPROVE"),
+            auto_approve=_env_flag("AI_LAB_CLINE_AUTO_APPROVE", default=True),
             thinking=os.environ.get("AI_LAB_CLINE_THINKING") or None,
         )
     )
