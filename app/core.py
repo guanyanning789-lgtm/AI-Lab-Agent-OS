@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol
 
+from app.cline import ClineRequest, ClineTransport
+
 
 class TaskStatus(str, Enum):
     PENDING = "PENDING"
@@ -31,6 +33,10 @@ class TaskState:
     retry_count: int = 0
     max_retries: int = 2
     assigned_agent: str | None = None
+    repository_path: str | None = None
+    tests: tuple[str, ...] = ()
+    approved: bool = False
+    verification_errors: tuple[str, ...] = ()
     steps: list[TaskStep] = field(default_factory=list)
     history: list[str] = field(default_factory=list)
     result: str | None = None
@@ -55,12 +61,40 @@ class Agent(Protocol):
 class CodingAgent:
     name = "coding"
 
+    def __init__(self, transport: ClineTransport | None = None) -> None:
+        self._transport = transport
+
     def run(self, task: TaskState) -> AgentResult:
         task.record("coding-agent: execution requested")
-        return AgentResult(
-            success=True,
-            message=f"Coding task accepted: {task.goal}",
+
+        if self._transport is None:
+            return AgentResult(
+                success=True,
+                message=f"Coding task accepted by deterministic adapter: {task.goal}",
+            )
+
+        if not task.approved:
+            return AgentResult(
+                success=False,
+                message="Human approval is required before delegating a coding task to Cline.",
+            )
+        if not task.repository_path:
+            return AgentResult(
+                success=False,
+                message="repository_path is required for Cline coding tasks.",
+            )
+
+        mode = "repair" if task.verification_errors else "delegate"
+        response = self._transport.send(
+            ClineRequest(
+                task=task.goal,
+                repository_path=task.repository_path,
+                tests=task.tests,
+                mode=mode,
+                verification_errors=task.verification_errors,
+            )
         )
+        return AgentResult(success=response.accepted, message=response.message)
 
 
 class ResearchAgent:
@@ -80,9 +114,9 @@ class ComputerAgent:
 
 
 class ToolRouter:
-    def __init__(self) -> None:
+    def __init__(self, *, coding_agent: Agent | None = None) -> None:
         self._agents: dict[str, Agent] = {
-            "coding": CodingAgent(),
+            "coding": coding_agent or CodingAgent(),
             "research": ResearchAgent(),
             "computer": ComputerAgent(),
         }
@@ -120,6 +154,7 @@ class RepairEngine:
     def repair(self, task: TaskState, failure: str) -> None:
         task.status = TaskStatus.REPAIRING
         task.retry_count += 1
+        task.verification_errors = (*task.verification_errors, failure)
         task.record(f"repair: {failure}")
 
 
@@ -130,8 +165,8 @@ class ReplanEngine:
 
 
 class Supervisor:
-    def __init__(self) -> None:
-        self.router = ToolRouter()
+    def __init__(self, *, router: ToolRouter | None = None) -> None:
+        self.router = router or ToolRouter()
         self.safety = SafetyGate()
         self.verifier = Verifier()
         self.repair = RepairEngine()
