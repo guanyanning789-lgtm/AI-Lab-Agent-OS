@@ -116,7 +116,7 @@ def test_supervisor_retries_as_repair_with_verification_error(tmp_path):
         task_id="t2",
         goal="fix the failing code tests",
         repository_path=str(tmp_path),
-        tests=("python -m pytest -q",),
+        tests=(),
         approved=True,
         max_retries=2,
     )
