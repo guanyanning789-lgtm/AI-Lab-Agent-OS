@@ -25,6 +25,8 @@ class TestCommandVerifier:
     generic arbitrary-shell execution surface.
     """
 
+    __test__ = False
+
     allowed_programs = {
         "python",
         "python.exe",
