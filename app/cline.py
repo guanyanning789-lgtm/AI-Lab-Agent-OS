@@ -20,6 +20,7 @@ class ClineRequest:
     tests: tuple[str, ...] = ()
     mode: str = "delegate"
     verification_errors: tuple[str, ...] = ()
+    allowed_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,12 +42,7 @@ class ClineCliConfig:
 
 
 class ClineCliTransport:
-    """Invoke Cline through its headless CLI boundary.
-
-    The transport deliberately owns only process invocation. Approval,
-    verification, retry, repair, and completion remain responsibilities of
-    AI Lab Agent OS.
-    """
+    """Invoke Cline through its headless CLI boundary."""
 
     def __init__(
         self,
@@ -68,7 +64,6 @@ class ClineCliTransport:
             return resolved
         if os.name != "nt":
             return None
-
         for directory in os.environ.get("PATH", "").split(os.pathsep):
             directory = directory.strip('" ')
             if not directory:
@@ -90,6 +85,14 @@ class ClineCliTransport:
             "Do not stop at planning or restating the request.",
             "Use the available coding tools to complete the task now.",
         ]
+        if request.allowed_paths:
+            lines += [
+                "",
+                "STRICT CHANGE SCOPE:",
+                "You may modify ONLY these repository-relative paths:",
+                *[f"- {item}" for item in request.allowed_paths],
+                "Do not create, modify, rename, or delete any other file.",
+            ]
         if request.tests:
             lines += ["", "Required verification commands/tests:"]
             lines += [f"- {item}" for item in request.tests]
@@ -127,18 +130,9 @@ class ClineCliTransport:
         resolved = self._resolver(self._config.executable)
         if not resolved:
             raise FileNotFoundError(self._config.executable)
-
         args = self._build_cli_args(request)
         if self._platform_name == "nt" and Path(resolved).suffix.lower() == ".ps1":
-            return [
-                "powershell.exe",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                resolved,
-                *args,
-            ]
+            return ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", resolved, *args]
         return [resolved, *args]
 
     @staticmethod
@@ -165,7 +159,6 @@ class ClineCliTransport:
         repository = Path(request.repository_path)
         if not repository.exists() or not repository.is_dir():
             return ClineResponse(False, f"Repository path does not exist or is not a directory: {repository}")
-
         try:
             command = self._build_launch_command(request)
             completed = self._runner(
@@ -182,7 +175,6 @@ class ClineCliTransport:
             return ClineResponse(False, "Cline CLI timed out before completing the task.")
         except OSError as exc:
             return ClineResponse(False, f"Cline CLI could not be started: {exc}")
-
         if completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip() or f"exit code {completed.returncode}"
             return ClineResponse(False, f"Cline CLI failed: {detail}")
