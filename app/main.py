@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.cline import ClineCliConfig, ClineCliTransport
 from app.core import CodingAgent, Supervisor, TaskState, ToolRouter
+from app.state_store import JsonTaskStore
 
 
 app = FastAPI(title="AI Lab Agent OS", version="0.1.0")
@@ -36,6 +37,7 @@ def build_supervisor() -> Supervisor:
 
 
 supervisor = build_supervisor()
+task_store = JsonTaskStore(os.environ.get("AI_LAB_TASK_STORE", ".ai-lab/tasks"))
 
 
 class TaskRequest(BaseModel):
@@ -60,6 +62,23 @@ class TaskResponse(BaseModel):
     steps: list[dict[str, str]]
 
 
+def _response(task: TaskState) -> TaskResponse:
+    return TaskResponse(
+        task_id=task.task_id,
+        goal=task.goal,
+        status=task.status.value,
+        assigned_agent=task.assigned_agent,
+        current_step=task.current_step,
+        retry_count=task.retry_count,
+        result=task.result,
+        history=task.history,
+        steps=[
+            {"name": step.name, "status": step.status.value, "message": step.message}
+            for step in task.steps
+        ],
+    )
+
+
 @app.get("/health")
 def health() -> dict[str, str | bool]:
     return {
@@ -79,23 +98,26 @@ def create_task(request: TaskRequest) -> TaskResponse:
         tests=request.tests,
         approved=request.approved,
     )
+    task_store.save(task)
 
     try:
         finished = supervisor.execute(task)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"task execution failed: {exc}") from exc
+        task.result = f"task execution failed: {exc}"
+        task_store.save(task)
+        raise HTTPException(status_code=500, detail=task.result) from exc
 
-    return TaskResponse(
-        task_id=finished.task_id,
-        goal=finished.goal,
-        status=finished.status.value,
-        assigned_agent=finished.assigned_agent,
-        current_step=finished.current_step,
-        retry_count=finished.retry_count,
-        result=finished.result,
-        history=finished.history,
-        steps=[
-            {"name": step.name, "status": step.status.value, "message": step.message}
-            for step in finished.steps
-        ],
-    )
+    task_store.save(finished)
+    return _response(finished)
+
+
+@app.get("/tasks/{task_id}", response_model=TaskResponse)
+def get_task(task_id: str) -> TaskResponse:
+    try:
+        task = task_store.load(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return _response(task)
