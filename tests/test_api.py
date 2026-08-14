@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import app, build_supervisor
 
 
 client = TestClient(app)
@@ -30,3 +30,25 @@ def test_rejects_unknown_request_fields() -> None:
         json={"goal": "Fix code", "unexpected": True},
     )
     assert response.status_code == 422
+
+
+def test_real_cline_transport_defaults_to_inner_auto_approval_when_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("AI_LAB_CLINE_ENABLED", "1")
+    monkeypatch.delenv("AI_LAB_CLINE_AUTO_APPROVE", raising=False)
+
+    supervisor = build_supervisor()
+    coding_agent = supervisor.router.get_agent("coding")
+
+    assert coding_agent._transport is not None
+    assert coding_agent._transport._config.auto_approve is True
+
+
+def test_inner_auto_approval_can_be_explicitly_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("AI_LAB_CLINE_ENABLED", "1")
+    monkeypatch.setenv("AI_LAB_CLINE_AUTO_APPROVE", "0")
+
+    supervisor = build_supervisor()
+    coding_agent = supervisor.router.get_agent("coding")
+
+    assert coding_agent._transport is not None
+    assert coding_agent._transport._config.auto_approve is False
