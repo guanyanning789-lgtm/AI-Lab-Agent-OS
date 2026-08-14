@@ -50,15 +50,26 @@ Natural-language goal
 
 The runtime keeps a deterministic in-process Coding Agent fallback so orchestration can be tested in CI without Cline installed. When `AI_LAB_CLINE_ENABLED=1`, Coding Agent delegates through the real Cline CLI transport.
 
-## Safety defaults
+## Safety and approval handoff
 
-Real Cline execution is **off by default**. Enabling the transport still does not grant task approval automatically.
+Real Cline execution is **off by default**. AI Lab owns the outer approval boundary.
 
-- `AI_LAB_CLINE_ENABLED=1` enables the Cline-backed Coding Agent.
-- `approved: true` is required on an individual coding task before Cline is invoked.
-- `AI_LAB_CLINE_AUTO_APPROVE` defaults to false and controls Cline's own CLI auto-approval setting.
+- `AI_LAB_CLINE_ENABLED=1` explicitly enables the real Cline-backed Coding Agent.
+- `approved: true` is still required on every individual coding task before Cline is invoked.
+- Once those outer gates pass, Cline tool auto-approval defaults to `true` because JSON/headless execution cannot pause for an interactive terminal approval prompt.
+- `AI_LAB_CLINE_AUTO_APPROVE=0` can still disable inner Cline tool auto-approval for debugging/interactive approval workflows, but this is not suitable for unattended JSON/headless execution.
 - Cline is instructed to stay inside the supplied repository and not commit, push, merge, or change branches.
 - AI Lab Agent OS retains ownership of verification, retry, repair, replan and completion decisions.
+
+The intended trust chain is:
+
+```text
+human/operator approval
+ -> AI Lab task approval + repository scope
+ -> Cline internal tool auto-approval inside that task
+ -> independent AI Lab verification
+ -> COMPLETE / Repair / Replan
+```
 
 ## Quick start
 
@@ -82,7 +93,6 @@ On Windows PowerShell:
 
 ```powershell
 $env:AI_LAB_CLINE_ENABLED = "1"
-$env:AI_LAB_CLINE_AUTO_APPROVE = "0"
 uvicorn app.main:app --reload
 ```
 
@@ -99,6 +109,10 @@ Then POST a task containing the local repository path, verification commands and
 ```
 
 If the first Cline attempt fails verification, the Supervisor records the failure, increments the retry budget, switches the next Cline request to `repair` mode, and includes prior verification errors in the repair prompt.
+
+### Local real-Cline acceptance harness
+
+`scripts/local_cline_e2e.py` is deliberately an explicitly approved acceptance harness. It turns on Cline tool auto-approval for that scoped test task so the headless process can actually edit files and run tools without waiting for an impossible TTY approval.
 
 ## V0.1 acceptance target
 
