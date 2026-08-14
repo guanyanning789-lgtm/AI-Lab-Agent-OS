@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Protocol
 
 from app.cline import ClineRequest, ClineTransport
+from app.verification import TestCommandVerifier
 
 
 class TaskStatus(str, Enum):
@@ -144,10 +145,26 @@ class SafetyGate:
 
 
 class Verifier:
-    def verify(self, result: AgentResult) -> tuple[bool, str]:
-        if result.success:
-            return True, "verification passed"
-        return False, result.message or "verification failed"
+    def __init__(self, *, test_verifier: TestCommandVerifier | None = None) -> None:
+        self._test_verifier = test_verifier or TestCommandVerifier()
+
+    def verify(self, result: AgentResult, task: TaskState | None = None) -> tuple[bool, str]:
+        if not result.success:
+            return False, result.message or "verification failed"
+
+        if (
+            task is not None
+            and task.assigned_agent == "coding"
+            and task.repository_path
+            and task.tests
+        ):
+            evidence = self._test_verifier.run(
+                repository_path=task.repository_path,
+                commands=task.tests,
+            )
+            return evidence.passed, evidence.message
+
+        return True, "verification passed"
 
 
 class RepairEngine:
@@ -165,10 +182,15 @@ class ReplanEngine:
 
 
 class Supervisor:
-    def __init__(self, *, router: ToolRouter | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        router: ToolRouter | None = None,
+        verifier: Verifier | None = None,
+    ) -> None:
         self.router = router or ToolRouter()
         self.safety = SafetyGate()
-        self.verifier = Verifier()
+        self.verifier = verifier or Verifier()
         self.repair = RepairEngine()
         self.replan = ReplanEngine()
 
@@ -208,7 +230,8 @@ class Supervisor:
 
             task.status = TaskStatus.VERIFYING
             task.current_step = 3
-            ok, verification_message = self.verifier.verify(result)
+            ok, verification_message = self.verifier.verify(result, task)
+            task.steps[3].message = verification_message
             task.record(f"verification: {verification_message}")
             if ok:
                 task.steps[3].status = TaskStatus.COMPLETE
