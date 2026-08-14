@@ -24,12 +24,6 @@ def _env_flag(name: str, *, default: bool = False) -> bool:
 def build_supervisor() -> Supervisor:
     if not _env_flag("AI_LAB_CLINE_ENABLED"):
         return Supervisor()
-
-    # Cline's JSON/headless mode cannot pause for terminal approvals. Once the
-    # operator has explicitly enabled the Cline transport, individual tasks
-    # are still blocked by TaskState.approved. For an approved task we let
-    # Cline execute its internal tools unattended, while AI Lab retains the
-    # repository scope, verification and retry/repair authority.
     transport = ClineCliTransport(
         ClineCliConfig(
             executable=os.environ.get("AI_LAB_CLINE_EXECUTABLE", "cline"),
@@ -52,6 +46,7 @@ class TaskRequest(BaseModel):
     max_retries: int = Field(default=2, ge=0, le=5)
     repository_path: str | None = None
     tests: tuple[str, ...] = ()
+    allowed_paths: tuple[str, ...] = ()
     approved: bool = False
 
 
@@ -101,17 +96,16 @@ def create_task(request: TaskRequest) -> TaskResponse:
         max_retries=request.max_retries,
         repository_path=request.repository_path,
         tests=request.tests,
+        allowed_paths=request.allowed_paths,
         approved=request.approved,
     )
     task_store.save(task)
-
     try:
         finished = supervisor.execute(task)
     except Exception as exc:
         task.result = f"task execution failed: {exc}"
         task_store.save(task)
         raise HTTPException(status_code=500, detail=task.result) from exc
-
     task_store.save(finished)
     return _response(finished)
 
@@ -122,7 +116,6 @@ def get_task(task_id: str) -> TaskResponse:
         task = task_store.load(task_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
     return _response(task)
