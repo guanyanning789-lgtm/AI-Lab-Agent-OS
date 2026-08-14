@@ -13,7 +13,14 @@ class ScopeResult:
 
 
 class GitScopeGuard:
-    """Verify that a coding task only changes explicitly allowed paths."""
+    """Verify that a coding task only changes explicitly allowed source paths."""
+
+    ignored_prefixes = (
+        "__pycache__/",
+        ".pytest_cache/",
+        ".mypy_cache/",
+        ".ruff_cache/",
+    )
 
     def _changed_paths(self, repository_path: str) -> tuple[str, ...]:
         repository = Path(repository_path)
@@ -31,10 +38,13 @@ class GitScopeGuard:
         for raw_line in completed.stdout.splitlines():
             if len(raw_line) < 4:
                 continue
-            path = raw_line[3:].strip()
+            path = raw_line[3:].strip().replace("\\", "/")
             if " -> " in path:
                 path = path.split(" -> ", 1)[1]
-            paths.append(path.replace("\\", "/"))
+            normalized = path.lstrip("./")
+            if any(normalized.startswith(prefix) for prefix in self.ignored_prefixes):
+                continue
+            paths.append(path)
         return tuple(paths)
 
     def check(self, *, repository_path: str, allowed_paths: tuple[str, ...]) -> ScopeResult:
@@ -43,9 +53,7 @@ class GitScopeGuard:
 
         allowed = {item.replace("\\", "/").lstrip("./") for item in allowed_paths}
         changed = self._changed_paths(repository_path)
-        unauthorized = tuple(
-            path for path in changed if path.lstrip("./") not in allowed
-        )
+        unauthorized = tuple(path for path in changed if path.lstrip("./") not in allowed)
         if unauthorized:
             return ScopeResult(
                 False,
