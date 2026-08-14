@@ -11,6 +11,7 @@ def _request(tmp_path, **overrides):
         "tests": ("python -m pytest -q",),
         "mode": "delegate",
         "verification_errors": (),
+        "allowed_paths": (),
     }
     values.update(overrides)
     return ClineRequest(**values)
@@ -25,6 +26,16 @@ def test_command_uses_safe_defaults(tmp_path):
     assert command[command.index("--auto-approve") + 1] == "false"
     assert command[command.index("--cwd") + 1] == str(tmp_path)
     assert "--thinking" not in command
+
+
+def test_prompt_contains_strict_allowed_paths(tmp_path):
+    prompt = ClineCliTransport._build_prompt(
+        _request(tmp_path, allowed_paths=("calculator.py",))
+    )
+
+    assert "STRICT CHANGE SCOPE" in prompt
+    assert "- calculator.py" in prompt
+    assert "Do not create, modify, rename, or delete any other file." in prompt
 
 
 def test_windows_ps1_launcher_uses_powershell(tmp_path):
@@ -118,6 +129,7 @@ def test_supervisor_retries_as_repair_with_verification_error(tmp_path):
         repository_path=str(tmp_path),
         tests=(),
         approved=True,
+        allowed_paths=("calculator.py",),
         max_retries=2,
     )
 
@@ -127,5 +139,6 @@ def test_supervisor_retries_as_repair_with_verification_error(tmp_path):
     assert finished.retry_count == 1
     assert len(transport.requests) == 2
     assert transport.requests[0].mode == "delegate"
+    assert transport.requests[0].allowed_paths == ("calculator.py",)
     assert transport.requests[1].mode == "repair"
     assert "2 tests failed" in transport.requests[1].verification_errors
